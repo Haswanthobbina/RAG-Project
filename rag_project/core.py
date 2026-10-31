@@ -115,7 +115,10 @@ class RepositoryIndex:
         return Chunk(chunk_id=chunk_id, text=text, metadata=metadata)
 
     def ingest_repository(self, repo_path: str, include_extensions: Tuple[str, ...] = (".py", ".md", ".txt")) -> Dict[str, List[str]]:
-        root = Path(repo_path)
+        allowed_root = Path.cwd().resolve()
+        if repo_path not in {allowed_root.as_posix(), str(allowed_root)}:
+            raise ValueError(f"repo_path must match the current workspace root: {allowed_root}")
+        root = allowed_root
         added: List[str] = []
         updated: List[str] = []
         removed: List[str] = []

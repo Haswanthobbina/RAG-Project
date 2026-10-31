@@ -25,7 +25,10 @@ def create_app():
 
     @app.post("/ingest")
     def ingest(repo_path: str):
-        return INDEX.ingest_repository(repo_path)
+        try:
+            return INDEX.ingest_repository(repo_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/query")
     def query(payload: QueryRequest):

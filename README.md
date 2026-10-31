@@ -19,6 +19,8 @@ A minimal end-to-end **GitContext** prototype for repository intelligence.
 python -m rag_project.cli /absolute/path/to/repo "Where is X defined?"
 ```
 
+Note: for safety, the current prototype only ingests the active workspace root.
+
 ## Run API
 
 ```bash

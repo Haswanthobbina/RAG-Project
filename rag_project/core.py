@@ -1,17 +1,23 @@
+"""Core Repository Intelligence Engine with AST Chunking, Git Mining, and Hybrid Retrieval."""
 from __future__ import annotations
 
 import ast
 import hashlib
 import json
 import math
+import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-
-TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+from rag_project.bm25_index import BM25SearchEngine
+from rag_project.config import settings
+from rag_project.generator import CodeCopilotGenerator
+from rag_project.git_miner import GitMiner
+from rag_project.retriever import HybridRetriever
+from rag_project.vector_store import VectorStore
 
 
 @dataclass
@@ -22,68 +28,32 @@ class Chunk:
 
 
 class RepositoryIndex:
+    """Production Repository Intelligence Index."""
+
     def __init__(self) -> None:
         self.chunks: List[Chunk] = []
-        self.chunk_vectors: List[Dict[str, float]] = []
-        self.doc_freq: Dict[str, int] = {}
         self.file_state: Dict[str, Dict[str, str]] = {}
+        self.git_miner: Optional[GitMiner] = None
+        self.vector_store = VectorStore()
+        self.bm25_engine = BM25SearchEngine()
+        self.retriever = HybridRetriever(self.vector_store, self.bm25_engine)
+        self.generator = CodeCopilotGenerator()
 
     @staticmethod
-    def _tokenize(text: str) -> List[str]:
-        return [token.lower() for token in TOKEN_RE.findall(text)]
-
-    def _tfidf(self, text: str) -> Dict[str, float]:
-        tokens = self._tokenize(text)
-        if not tokens:
-            return {}
-        tf: Dict[str, int] = {}
-        for token in tokens:
-            tf[token] = tf.get(token, 0) + 1
-
-        num_docs = max(1, len(self.chunks))
-        vec: Dict[str, float] = {}
-        for token, count in tf.items():
-            df = self.doc_freq.get(token, 1)
-            idf = math.log((num_docs + 1) / df)
-            vec[token] = (count / len(tokens)) * idf
-        return vec
-
-    @staticmethod
-    def _cosine_similarity(a: Dict[str, float], b: Dict[str, float]) -> float:
-        if not a or not b:
-            return 0.0
-        dot = sum(val * b.get(key, 0.0) for key, val in a.items())
-        a_mag = math.sqrt(sum(v * v for v in a.values()))
-        b_mag = math.sqrt(sum(v * v for v in b.values()))
-        if a_mag == 0 or b_mag == 0:
-            return 0.0
-        return dot / (a_mag * b_mag)
-
-    @staticmethod
-    def _bm25_like(query_tokens: List[str], text: str) -> float:
-        text_tokens = RepositoryIndex._tokenize(text)
-        if not text_tokens:
-            return 0.0
-        token_count: Dict[str, int] = {}
-        for token in text_tokens:
-            token_count[token] = token_count.get(token, 0) + 1
-        return sum(math.log(1 + token_count.get(token, 0)) for token in query_tokens)
-
-    @staticmethod
-    def _rerank(query_tokens: List[str], text: str) -> float:
-        if not query_tokens:
-            return 0.0
-        text_tokens = set(RepositoryIndex._tokenize(text))
-        overlap = sum(1 for token in query_tokens if token in text_tokens)
-        return overlap / len(query_tokens)
-
-    @staticmethod
-    def _chunk_python(path: Path, content: str) -> Iterable[Tuple[str, str, int, int]]:
-        parsed = ast.parse(content)
+    def _chunk_python(path: Path, content: str) -> Iterable[Tuple[str, str, int, int, str]]:
+        """Parses Python code using AST to identify functions, classes, and module docstrings."""
         lines = content.splitlines()
+        try:
+            parsed = ast.parse(content)
+        except SyntaxError:
+            # Fallback to module chunk if syntax error
+            yield "module", path.stem, 1, max(1, len(lines)), content
+            return
 
+        has_structural_nodes = False
         for node in parsed.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                has_structural_nodes = True
                 start = node.lineno
                 end = getattr(node, "end_lineno", node.lineno)
                 chunk_text = "\n".join(lines[start - 1 : end])
@@ -91,130 +61,177 @@ class RepositoryIndex:
                 chunk_name = node.name
                 yield chunk_type, chunk_name, start, end, chunk_text
 
+        # Capture top-level module header or docstring
         if parsed.body:
-            first = parsed.body[0].lineno
-            if first > 1:
-                header = "\n".join(lines[: first - 1]).strip()
+            first_lineno = parsed.body[0].lineno
+            if first_lineno > 1:
+                header = "\n".join(lines[: first_lineno - 1]).strip()
                 if header:
-                    yield "module", path.stem, 1, first - 1, header
+                    yield "module", path.stem, 1, first_lineno - 1, header
+
+        if not has_structural_nodes and content.strip():
+            yield "module", path.stem, 1, max(1, len(lines)), content
 
     @staticmethod
     def _hash_text(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    def _build_chunk(self, path: Path, chunk_type: str, name: str, start: int, end: int, text: str) -> Chunk:
-        chunk_id = f"{path.as_posix()}::{chunk_type}::{name}::{start}-{end}"
+    def _build_chunk(
+        self,
+        path: Path,
+        chunk_type: str,
+        name: str,
+        start: int,
+        end: int,
+        text: str,
+        git_meta: Optional[Dict[str, str]] = None,
+    ) -> Chunk:
+        posix_path = path.as_posix()
+        chunk_id = f"{posix_path}::{chunk_type}::{name}::{start}-{end}"
         metadata = {
-            "file_path": path.as_posix(),
+            "file_path": str(path),
+            "file_path_posix": posix_path,
             "chunk_type": chunk_type,
             "name": name,
             "start_line": str(start),
             "end_line": str(end),
             "last_modified": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
         }
+        if git_meta:
+            metadata.update(git_meta)
         return Chunk(chunk_id=chunk_id, text=text, metadata=metadata)
 
-    def ingest_repository(self, repo_path: str, include_extensions: Tuple[str, ...] = (".py", ".md", ".txt")) -> Dict[str, List[str]]:
-        allowed_root = Path.cwd().resolve()
-        if repo_path not in {allowed_root.as_posix(), str(allowed_root)}:
-            raise ValueError(f"repo_path must match the current workspace root: {allowed_root}")
-        root = allowed_root
+    def ingest_repository(
+        self,
+        repo_path: Optional[str] = None,
+        include_extensions: Tuple[str, ...] = settings.SUPPORTED_EXTENSIONS,
+    ) -> Dict[str, List[str]]:
+        """Ingests repository files, extracts AST chunks, attaches Git metadata, and builds indices."""
+        target_dir = Path(repo_path).resolve() if repo_path else Path.cwd().resolve()
+        if not target_dir.exists() or not target_dir.is_dir():
+            raise ValueError(f"repo_path directory does not exist: {target_dir}")
+
+        self.git_miner = GitMiner(target_dir)
+
         added: List[str] = []
         updated: List[str] = []
         removed: List[str] = []
 
-        current_files = {
-            p.as_posix(): p
-            for p in root.rglob("*")
-            if p.is_file() and p.suffix.lower() in include_extensions and ".git/" not in p.as_posix()
-        }
+        # Discover all eligible files
+        current_files: Dict[str, Path] = {}
+        for root, dirs, files in os.walk(target_dir):
+            dirs[:] = [d for d in dirs if d not in settings.IGNORED_DIRS and not d.startswith(".")]
+            for file in files:
+                file_path = Path(root) / file
+                if file_path.suffix.lower() in include_extensions:
+                    current_files[str(file_path)] = file_path
 
+        # Handle removed files
         for tracked_file in list(self.file_state.keys()):
             if tracked_file not in current_files:
                 removed.append(tracked_file)
                 self.file_state.pop(tracked_file, None)
-                self.chunks = [chunk for chunk in self.chunks if chunk.metadata["file_path"] != tracked_file]
+                self.chunks = [c for c in self.chunks if c.metadata["file_path"] != tracked_file]
 
-        for rel_path, absolute_path in current_files.items():
-            text = absolute_path.read_text(encoding="utf-8", errors="ignore")
+        # Ingest and detect modified files
+        for file_key, absolute_path in current_files.items():
+            try:
+                text = absolute_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                continue
+
             digest = self._hash_text(text)
             mtime = str(absolute_path.stat().st_mtime_ns)
-            state = self.file_state.get(rel_path)
+            state = self.file_state.get(file_key)
+
             if state and state["digest"] == digest and state["mtime"] == mtime:
                 continue
 
             if state:
-                updated.append(rel_path)
+                updated.append(file_key)
             else:
-                added.append(rel_path)
+                added.append(file_key)
 
-            self.chunks = [chunk for chunk in self.chunks if chunk.metadata["file_path"] != rel_path]
+            # Clear old chunks for this file
+            self.chunks = [c for c in self.chunks if c.metadata["file_path"] != file_key]
+
+            # Get Git history & author attribution
+            git_meta = self.git_miner.get_file_metadata(absolute_path)
 
             if absolute_path.suffix.lower() == ".py":
-                try:
-                    produced_any = False
-                    for chunk_type, name, start, end, chunk_text in self._chunk_python(absolute_path, text):
-                        self.chunks.append(self._build_chunk(absolute_path, chunk_type, name, start, end, chunk_text))
-                        produced_any = True
-                    if not produced_any:
-                        self.chunks.append(self._build_chunk(absolute_path, "module", absolute_path.stem, 1, max(1, len(text.splitlines())), text))
-                except SyntaxError:
-                    self.chunks.append(self._build_chunk(absolute_path, "module", absolute_path.stem, 1, max(1, len(text.splitlines())), text))
+                for chunk_type, name, start, end, chunk_text in self._chunk_python(absolute_path, text):
+                    self.chunks.append(
+                        self._build_chunk(absolute_path, chunk_type, name, start, end, chunk_text, git_meta)
+                    )
             else:
-                self.chunks.append(self._build_chunk(absolute_path, "document", absolute_path.stem, 1, max(1, len(text.splitlines())), text))
+                chunk_type = "document" if absolute_path.suffix.lower() in (".md", ".txt") else "code"
+                lines = text.splitlines()
+                self.chunks.append(
+                    self._build_chunk(
+                        absolute_path,
+                        chunk_type,
+                        absolute_path.stem,
+                        1,
+                        max(1, len(lines)),
+                        text,
+                        git_meta,
+                    )
+                )
 
-            self.file_state[rel_path] = {"digest": digest, "mtime": mtime}
+            self.file_state[file_key] = {"digest": digest, "mtime": mtime}
 
-        self._recompute_statistics()
+        # Build dual indices
+        self._recompute_indices()
+
+        if self.git_miner:
+            self.git_miner.update_last_commit()
 
         return {"added": added, "updated": updated, "removed": removed}
 
-    def _recompute_statistics(self) -> None:
-        self.doc_freq = {}
-        for chunk in self.chunks:
-            unique_tokens = set(self._tokenize(chunk.text))
-            for token in unique_tokens:
-                self.doc_freq[token] = self.doc_freq.get(token, 0) + 1
-        self.chunk_vectors = [self._tfidf(chunk.text) for chunk in self.chunks]
+    def _recompute_indices(self) -> None:
+        """Re-indexes chunks into both Dense Vector Store and BM25 Search Engine."""
+        chunk_dicts = [
+            {
+                "chunk_id": c.chunk_id,
+                "text": c.text,
+                "file_path": c.metadata.get("file_path", ""),
+                "name": c.metadata.get("name", ""),
+                "start_line": int(c.metadata.get("start_line", 1)),
+                "end_line": int(c.metadata.get("end_line", 1)),
+                "metadata": c.metadata,
+            }
+            for c in self.chunks
+        ]
+        self.vector_store.build_index(chunk_dicts)
+        self.bm25_engine.build_index(chunk_dicts)
 
-    def query(self, prompt: str, top_k: int = 5) -> List[Dict[str, object]]:
-        query_tokens = self._tokenize(prompt)
-        query_vector = self._tfidf(prompt)
+    def query(self, prompt: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Queries the repository using Hybrid Retrieval (Vector + BM25) and Reranking."""
+        return self.retriever.retrieve(prompt, top_k=top_k)
 
-        scored: List[Tuple[float, Chunk]] = []
-        for chunk, vec in zip(self.chunks, self.chunk_vectors):
-            vector_score = self._cosine_similarity(query_vector, vec)
-            keyword_score = self._bm25_like(query_tokens, chunk.text)
-            combined = 0.6 * vector_score + 0.4 * keyword_score
-            scored.append((combined, chunk))
+    def ask(self, question: str, top_k: int = 5) -> Dict[str, Any]:
+        """Generates copilot answer with grounded citations."""
+        contexts = self.query(question, top_k=top_k)
+        return self.generator.generate(question, contexts)
 
-        scored.sort(key=lambda item: item[0], reverse=True)
-        shortlisted = scored[: max(top_k * 2, top_k)]
+    def sync(self) -> Dict[str, Any]:
+        """Performs incremental synchronization of changed files."""
+        if not self.git_miner or not self.git_miner.is_git_repo:
+            # Fallback to filesystem mtime scan
+            target_dir = Path.cwd().resolve()
+            return self.ingest_repository(str(target_dir))
 
-        reranked = []
-        for score, chunk in shortlisted:
-            rerank_score = self._rerank(query_tokens, chunk.text)
-            reranked.append((score + 0.2 * rerank_score, score, rerank_score, chunk))
-
-        reranked.sort(key=lambda item: item[0], reverse=True)
-        results = []
-        for final_score, hybrid_score, rerank_score, chunk in reranked[:top_k]:
-            results.append(
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "score": round(final_score, 6),
-                    "hybrid_score": round(hybrid_score, 6),
-                    "rerank_score": round(rerank_score, 6),
-                    "metadata": chunk.metadata,
-                    "text": chunk.text,
-                }
-            )
-        return results
+        changed_files = self.git_miner.detect_changed_files()
+        ingest_res = self.ingest_repository(str(self.git_miner.repo_path))
+        return {
+            "git_changed_files": changed_files,
+            "ingested_updates": ingest_res,
+        }
 
     def serialize(self) -> str:
         return json.dumps(
             {
-                "chunks": [asdict(chunk) for chunk in self.chunks],
+                "chunks": [asdict(c) for c in self.chunks],
                 "file_state": self.file_state,
             }
         )

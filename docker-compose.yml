@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  gitcontext:
+    build: .
+    container_name: gitcontext-copilot
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - DEBUG=false
+    volumes:
+      - ./:/workspace:ro
+    restart: unless-stopped

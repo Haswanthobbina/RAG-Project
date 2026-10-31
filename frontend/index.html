@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GitContext - Codebase Intelligence & Developer Copilot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    pre code {
+      background-color: #0f172a;
+      border-radius: 0.5rem;
+      padding: 1rem;
+      display: block;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.85rem;
+      color: #e2e8f0;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans selection:bg-indigo-500 selection:text-white">
+  
+  <!-- Navigation Header -->
+  <header class="border-b border-slate-800 bg-slate-900/60 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold shadow-lg shadow-indigo-500/30">
+          <i class="fa-solid fa-code-branch"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            GitContext <span class="text-xs px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-400 border border-indigo-800 font-normal">v1.0.0</span>
+          </h1>
+          <p class="text-xs text-slate-400">End-to-End Codebase Intelligence & Developer Copilot</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-4">
+        <button onclick="runEvaluation()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center gap-1.5">
+          <i class="fa-solid fa-chart-line text-emerald-400"></i> Run Benchmark
+        </button>
+        <a href="/docs" target="_blank" class="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5">
+          <i class="fa-solid fa-book"></i> API Docs
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto px-6 py-8">
+    
+    <!-- Top Ingestion Bar -->
+    <section class="bg-slate-900 rounded-xl p-5 border border-slate-800 mb-8 shadow-sm">
+      <div class="flex flex-col md:flex-row gap-4 items-center justify-between">
+        <div class="w-full md:w-3/4 flex gap-3">
+          <div class="relative flex-1">
+            <span class="absolute inset-y-0 left-0 flex items-center pl-3.5 text-slate-500 text-sm">
+              <i class="fa-solid fa-folder-tree"></i>
+            </span>
+            <input id="repoPath" type="text" placeholder="Enter absolute repository path (leave empty for current directory)" 
+                   class="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-4 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500">
+          </div>
+          <button onclick="ingestRepo()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 whitespace-nowrap">
+            <i class="fa-solid fa-bolt"></i> Ingest & Index
+          </button>
+        </div>
+
+        <div class="flex items-center gap-4 text-xs text-slate-400 w-full md:w-auto justify-end">
+          <div class="flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            <span id="chunksCount">Chunks: Ready</span>
+          </div>
+          <button onclick="syncStaleFiles()" class="text-slate-400 hover:text-slate-200 transition flex items-center gap-1">
+            <i class="fa-solid fa-arrows-rotate"></i> Sync Diff
+          </button>
+        </div>
+      </div>
+      <div id="ingestStatus" class="mt-3 text-xs text-slate-400 hidden"></div>
+    </section>
+
+    <!-- Query & Response Layout -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      
+      <!-- Left Column: Search & Answer -->
+      <div class="lg:col-span-2 space-y-6">
+        
+        <!-- Query Box -->
+        <div class="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-sm">
+          <div class="flex justify-between items-center mb-3">
+            <label for="queryInput" class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <i class="fa-solid fa-magnifying-glass text-indigo-400"></i> Ask Codebase Question or Search Error
+            </label>
+            <span class="text-xs text-slate-400">Hybrid: Dense Vector + BM25 + Cross-Encoder</span>
+          </div>
+          <textarea id="queryInput" rows="3" placeholder="e.g. Where is GitMiner defined and how does it detect stale files? Or paste an error traceback..." 
+                    class="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"></textarea>
+          
+          <div class="flex items-center justify-between mt-3">
+            <div class="flex gap-2">
+              <button onclick="setSampleQuery('Where is GitMiner defined and what does it do?')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 transition">Sample 1: GitMiner</button>
+              <button onclick="setSampleQuery('Where is BM25SearchEngine implemented?')" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1 rounded border border-slate-700 transition">Sample 2: BM25</button>
+            </div>
+            <button onclick="askCopilot()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-2 rounded-lg text-sm transition flex items-center gap-2 shadow-lg shadow-emerald-950">
+              <i class="fa-solid fa-paper-plane"></i> Ask Copilot
+            </button>
+          </div>
+        </div>
+
+        <!-- Answer Container -->
+        <div id="answerCard" class="bg-slate-900 rounded-xl p-6 border border-slate-800 shadow-sm hidden">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+            <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <i class="fa-solid fa-robot text-emerald-400"></i> Copilot Grounded Answer
+            </h2>
+            <span id="responseBadge" class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700">RAG Grounded</span>
+          </div>
+          <div id="answerBody" class="prose prose-invert max-w-none text-sm text-slate-300 leading-relaxed space-y-3"></div>
+        </div>
+
+        <!-- Benchmark Modal / Section -->
+        <div id="benchmarkCard" class="bg-slate-900 rounded-xl p-6 border border-slate-800 shadow-sm hidden">
+          <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2 mb-4">
+            <i class="fa-solid fa-chart-simple text-indigo-400"></i> Retrieval Benchmark Suite (RAG Evaluation)
+          </h2>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4" id="benchmarkMetrics"></div>
+        </div>
+      </div>
+
+      <!-- Right Column: Citations & Context Sidebar -->
+      <div class="space-y-6">
+        <div class="bg-slate-900 rounded-xl p-5 border border-slate-800 shadow-sm sticky top-24">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+            <h3 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <i class="fa-solid fa-bookmark text-indigo-400"></i> Grounded Citations
+            </h3>
+            <span id="citationsCount" class="text-xs text-slate-500">0 sources</span>
+          </div>
+          
+          <div id="citationsList" class="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
+            <div class="text-center py-10 text-slate-500 text-xs">
+              <i class="fa-solid fa-magnifying-glass-location text-2xl mb-2 text-slate-600 block"></i>
+              Ask a question to see exact file paths, line ranges, commit hashes, and author attributions.
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <script>
+    const API_BASE = window.location.origin;
+
+    function setSampleQuery(text) {
+      document.getElementById('queryInput').value = text;
+      askCopilot();
+    }
+
+    async function ingestRepo() {
+      const path = document.getElementById('repoPath').value.trim();
+      const statusEl = document.getElementById('ingestStatus');
+      const chunksCountEl = document.getElementById('chunksCount');
+
+      statusEl.classList.remove('hidden');
+      statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-indigo-400"></i> Parsing AST structures, extracting Git history, and generating hybrid embeddings...';
+
+      try {
+        const res = await fetch(`${API_BASE}/ingest`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({repo_path: path || null})
+        });
+        const data = await res.json();
+        if (res.ok) {
+          statusEl.innerHTML = `<span class="text-emerald-400 font-medium">✓ Ingestion Complete:</span> ${data.chunks_indexed} structural code chunks successfully indexed into dual retrieval engines.`;
+          chunksCountEl.innerText = `Chunks: ${data.chunks_indexed} indexed`;
+        } else {
+          statusEl.innerHTML = `<span class="text-rose-400">✗ Error:</span> ${data.detail || 'Failed to ingest repository.'}`;
+        }
+      } catch (err) {
+        statusEl.innerHTML = `<span class="text-rose-400">✗ Network Error:</span> ${err.message}`;
+      }
+    }
+
+    async function syncStaleFiles() {
+      const statusEl = document.getElementById('ingestStatus');
+      statusEl.classList.remove('hidden');
+      statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-indigo-400"></i> Running Git diff and incremental synchronization...';
+
+      try {
+        const res = await fetch(`${API_BASE}/sync`, {method: 'POST'});
+        const data = await res.json();
+        statusEl.innerHTML = `<span class="text-emerald-400 font-medium">✓ Incremental Sync:</span> Up to date with latest working tree changes.`;
+      } catch (err) {
+        statusEl.innerHTML = `<span class="text-rose-400">✗ Error syncing:</span> ${err.message}`;
+      }
+    }
+
+    async function askCopilot() {
+      const q = document.getElementById('queryInput').value.trim();
+      if (!q) return;
+
+      const answerCard = document.getElementById('answerCard');
+      const answerBody = document.getElementById('answerBody');
+      const citationsList = document.getElementById('citationsList');
+      const citationsCount = document.getElementById('citationsCount');
+
+      answerCard.classList.remove('hidden');
+      answerBody.innerHTML = '<div class="flex items-center gap-2 text-slate-400"><i class="fa-solid fa-spinner fa-spin text-emerald-400"></i> Retrieving hybrid contexts & generating answer...</div>';
+
+      try {
+        const res = await fetch(`${API_BASE}/ask`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({question: q, top_k: 5})
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          answerBody.innerHTML = marked.parse(data.answer);
+
+          if (data.citations && data.citations.length > 0) {
+            citationsCount.innerText = `${data.citations.length} sources`;
+            citationsList.innerHTML = data.citations.map((c, i) => `
+              <div class="p-3 bg-slate-950 rounded-lg border border-slate-800 hover:border-slate-700 transition">
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span class="font-mono text-indigo-400 font-medium truncate max-w-[200px]" title="${c.file_path}">${c.file_path.split(/[\\\\/]/).pop()}:${c.lines}</span>
+                  <span class="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-400">${c.chunk_type}</span>
+                </div>
+                <div class="text-[11px] text-slate-400 flex items-center gap-2 mt-1">
+                  <span><i class="fa-solid fa-user text-[10px] text-slate-500"></i> ${c.author || 'local'}</span>
+                  <span><i class="fa-solid fa-code-commit text-[10px] text-slate-500"></i> ${c.commit || 'head'}</span>
+                </div>
+                <div class="text-[10px] text-slate-500 mt-1">Hybrid Score: ${(c.score || 0).toFixed(4)}</div>
+              </div>
+            `).join('');
+          } else {
+            citationsCount.innerText = '0 sources';
+            citationsList.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">No citations found.</div>';
+          }
+        } else {
+          answerBody.innerHTML = `<span class="text-rose-400">Error:</span> ${data.detail || 'Request failed'}`;
+        }
+      } catch (err) {
+        answerBody.innerHTML = `<span class="text-rose-400">Network Error:</span> ${err.message}`;
+      }
+    }
+
+    async function runEvaluation() {
+      const benchmarkCard = document.getElementById('benchmarkCard');
+      const benchmarkMetrics = document.getElementById('benchmarkMetrics');
+
+      benchmarkCard.classList.remove('hidden');
+      benchmarkMetrics.innerHTML = '<div class="col-span-4 text-xs text-slate-400"><i class="fa-solid fa-spinner fa-spin text-indigo-400"></i> Running automated benchmark over indexed codebase...</div>';
+
+      try {
+        const res = await fetch(`${API_BASE}/evaluate?top_k=5`);
+        const data = await res.json();
+
+        benchmarkMetrics.innerHTML = `
+          <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+            <div class="text-xs text-slate-400">Recall@5</div>
+            <div class="text-2xl font-bold text-emerald-400 mt-1">${data.recall_at_5_percent}%</div>
+          </div>
+          <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+            <div class="text-xs text-slate-400">Citation Accuracy</div>
+            <div class="text-2xl font-bold text-indigo-400 mt-1">${data.citation_accuracy_percent}%</div>
+          </div>
+          <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+            <div class="text-xs text-slate-400">Retrieval Precision</div>
+            <div class="text-2xl font-bold text-amber-400 mt-1">${data.precision_at_5_percent}%</div>
+          </div>
+          <div class="bg-slate-950 p-4 rounded-lg border border-slate-800">
+            <div class="text-xs text-slate-400">Avg Latency</div>
+            <div class="text-2xl font-bold text-cyan-400 mt-1">${data.avg_latency_ms} ms</div>
+          </div>
+        `;
+      } catch (err) {
+        benchmarkMetrics.innerHTML = `<div class="col-span-4 text-xs text-rose-400">Benchmark error: ${err.message}</div>`;
+      }
+    }
+  </script>
+</body>
+</html>

@@ -18,8 +18,21 @@ class CodeCopilotGenerator:
                 import google.generativeai as genai
 
                 genai.configure(api_key=settings.GEMINI_API_KEY)
-                self.client = genai.GenerativeModel("gemini-1.5-flash")
-                self.provider = "gemini"
+                
+                # Try contemporary models in priority order
+                candidate_models = [
+                    "gemini-3.8-flash",
+                    "gemini-flash-latest",
+                    "gemini-2.5-flash",
+                    "gemini-1.5-flash",
+                ]
+                for model_name in candidate_models:
+                    try:
+                        self.client = genai.GenerativeModel(model_name)
+                        self.provider = f"gemini ({model_name})"
+                        break
+                    except Exception:
+                        continue
             except Exception:
                 pass
 
@@ -85,7 +98,7 @@ Guidelines:
                 "citations": [],
             }
 
-        if self.provider == "gemini" and self.client is not None:
+        if self.client is not None and "gemini" in self.provider:
             try:
                 prompt = self.build_prompt(question, contexts)
                 resp = self.client.generate_content(prompt)
@@ -93,10 +106,10 @@ Guidelines:
                     "question": question,
                     "answer": resp.text,
                     "citations": citations,
-                    "provider": "gemini",
+                    "provider": self.provider,
                 }
             except Exception as e:
-                # Fallback to high-fidelity built-in generator
+                # Fallback to high-fidelity built-in generator if network/quota error
                 pass
 
         # High-Fidelity Built-in Synthesizer

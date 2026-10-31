@@ -197,11 +197,3 @@ python -m pytest tests/ -v
 ```
 
 ---
-
-## 💼 Resume Angle (For Your CV / Portfolio)
-
-> **GitContext: End-to-End Codebase Intelligence & Developer Copilot** *(Python, FastAPI, RAG, BM25, AST, Docker)*
-> - Engineered a production RAG codebase copilot that ingests repositories, performs AST-based function/class chunking, and maps Git author and commit histories.
-> - Implemented a hybrid retrieval architecture combining dense vector embeddings with BM25 keyword matching via Reciprocal Rank Fusion (RRF) and Cross-Encoder reranking.
-> - Achieved **93.3% Recall@5** and **sub-millisecond (0.69 ms)** retrieval latency on codebase benchmark evaluations.
-> - Built incremental re-indexing using Git diff hashing to detect stale code files, paired with a FastAPI backend, Docker deployment, and CI/CD automation.
